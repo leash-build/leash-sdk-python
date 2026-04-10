@@ -19,11 +19,18 @@ class LeashIntegrations:
         auth_token: The leash-auth JWT token (from cookie or env).
         platform_url: Base URL of the Leash platform API.
             Defaults to https://api.leash.build.
+        api_key: Optional API key for server-to-server authentication.
     """
 
-    def __init__(self, auth_token: str, platform_url: str = DEFAULT_PLATFORM_URL):
+    def __init__(
+        self,
+        auth_token: str,
+        platform_url: str = DEFAULT_PLATFORM_URL,
+        api_key: Optional[str] = None,
+    ):
         self.auth_token = auth_token
         self.platform_url = platform_url.rstrip("/")
+        self.api_key = api_key
 
     @property
     def gmail(self) -> GmailClient:
@@ -54,13 +61,16 @@ class LeashIntegrations:
         Raises:
             LeashError: If the platform returns a non-success response.
         """
+        headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
         response = requests.post(
             f"{self.platform_url}/api/integrations/{provider}/{action}",
             json=params or {},
-            headers={
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         data = response.json()
         if not data.get("success"):
@@ -93,9 +103,12 @@ class LeashIntegrations:
         Returns:
             A list of connection status dicts.
         """
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
         response = requests.get(
             f"{self.platform_url}/api/integrations/connections",
-            headers={"Authorization": f"Bearer {self.auth_token}"},
+            headers=headers,
         )
         data = response.json()
         if not data.get("success"):

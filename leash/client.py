@@ -1,5 +1,6 @@
 """Main LeashIntegrations client."""
 
+import os
 from typing import Any, Dict, Optional
 
 import requests
@@ -28,14 +29,9 @@ class LeashIntegrations:
         platform_url: str = DEFAULT_PLATFORM_URL,
         api_key: Optional[str] = None,
     ):
-        if api_key is None:
-            raise ValueError(
-                "API key required. Create one with `leash keys create <app-name>` "
-                "or in your app settings at leash.build"
-            )
         self.auth_token = auth_token
         self.platform_url = platform_url.rstrip("/")
-        self.api_key = api_key
+        self.api_key = api_key or os.environ.get("LEASH_API_KEY")
 
     @property
     def gmail(self) -> GmailClient:

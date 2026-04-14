@@ -33,6 +33,7 @@ class LeashIntegrations:
         self.auth_token = auth_token
         self.platform_url = platform_url.rstrip("/")
         self.api_key = api_key or os.environ.get("LEASH_API_KEY")
+        self._env_cache: Optional[Dict[str, str]] = None
 
     @property
     def gmail(self) -> GmailClient:
@@ -175,6 +176,82 @@ class LeashIntegrations:
                 code=data.get("code"),
             )
         return data.get("data", [])
+
+    def mcp(self, package: str, tool: str, args: Optional[Dict[str, Any]] = None) -> Any:
+        """Call any MCP server tool directly.
+
+        Args:
+            package: The npm package name of the MCP server.
+            tool: The tool name to invoke.
+            args: Optional arguments to pass to the tool.
+
+        Returns:
+            The ``data`` field from the platform response.
+
+        Raises:
+            LeashError: If the platform returns a non-success response.
+        """
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if self.auth_token:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+
+        payload: Dict[str, Any] = {"package": package, "tool": tool}
+        if args is not None:
+            payload["args"] = args
+
+        response = requests.post(
+            f"{self.platform_url}/api/mcp/run",
+            json=payload,
+            headers=headers,
+        )
+        data = response.json()
+        if not data.get("success"):
+            raise LeashError(
+                message=data.get("error", "Unknown error"),
+                code=data.get("code"),
+                connect_url=data.get("connectUrl"),
+            )
+        return data.get("data")
+
+    def get_env(self, key: Optional[str] = None) -> Any:
+        """Fetch env vars from the platform. Cached after first call.
+
+        Args:
+            key: Optional key to look up. If provided, returns just that value
+                (or None if not found). If omitted, returns the full dict.
+
+        Returns:
+            A dict of all env vars, or a single value if ``key`` is provided.
+
+        Raises:
+            LeashError: If the platform returns a non-success response.
+        """
+        if self._env_cache is None:
+            headers: Dict[str, str] = {}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+
+            response = requests.get(
+                f"{self.platform_url}/api/apps/env",
+                headers=headers,
+            )
+            data = response.json()
+            if not data.get("success"):
+                raise LeashError(
+                    message=data.get("error", "Unknown error"),
+                    code=data.get("code"),
+                )
+            self._env_cache = data.get("data", {})
+
+        if key is not None:
+            return self._env_cache.get(key)
+        return self._env_cache
 
     def get_connect_url(self, provider_id: str, return_url: Optional[str] = None) -> str:
         """Get the URL to connect a provider (for UI buttons).

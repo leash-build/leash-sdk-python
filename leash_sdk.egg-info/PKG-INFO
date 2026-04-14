@@ -1,12 +1,14 @@
 Metadata-Version: 2.4
 Name: leash-sdk
-Version: 0.1.0
+Version: 0.2.0
 Summary: Leash platform SDK - access Gmail, Calendar, Drive and more from deployed apps
-License: MIT
+License: Apache-2.0
 Project-URL: Homepage, https://leash.build
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: requests>=2.28
+Dynamic: license-file
 Dynamic: requires-python
 
 # Leash SDK (Python)

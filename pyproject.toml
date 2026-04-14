@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leash-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Leash platform SDK - access Gmail, Calendar, Drive and more from deployed apps"
 readme = "README.md"
 license = {text = "Apache-2.0"}

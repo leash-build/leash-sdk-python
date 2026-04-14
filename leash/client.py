@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from leash.calendar import CalendarClient
+from leash.custom import CustomIntegration
 from leash.drive import DriveClient
 from leash.gmail import GmailClient
 from leash.types import LeashError
@@ -47,6 +48,62 @@ class LeashIntegrations:
     def drive(self) -> DriveClient:
         """Google Drive integration client."""
         return DriveClient(self._call)
+
+    def integration(self, name: str) -> "CustomIntegration":
+        """Access a custom integration by name. Returns an untyped client.
+
+        Args:
+            name: The custom integration name.
+
+        Returns:
+            A CustomIntegration instance with a ``call`` method for proxied requests.
+        """
+        return CustomIntegration(name, self._call_custom)
+
+    def _call_custom(self, name: str, path: str, method: str = "GET",
+                     body: Optional[Dict[str, Any]] = None,
+                     headers: Optional[Dict[str, str]] = None) -> Any:
+        """Call the custom integration proxy endpoint.
+
+        Args:
+            name: The custom integration name.
+            path: The endpoint path to forward.
+            method: HTTP method (default GET).
+            body: Optional request body.
+            headers: Optional extra headers to forward.
+
+        Returns:
+            The ``data`` field from the platform response.
+
+        Raises:
+            LeashError: If the platform returns a non-success response.
+        """
+        req_headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            req_headers["X-API-Key"] = self.api_key
+
+        payload: Dict[str, Any] = {"path": path, "method": method}
+        if body is not None:
+            payload["body"] = body
+        if headers is not None:
+            payload["headers"] = headers
+
+        response = requests.post(
+            f"{self.platform_url}/api/integrations/custom/{name}",
+            json=payload,
+            headers=req_headers,
+        )
+        data = response.json()
+        if not data.get("success"):
+            raise LeashError(
+                message=data.get("error", "Unknown error"),
+                code=data.get("code"),
+                connect_url=data.get("connectUrl"),
+            )
+        return data.get("data")
 
     def _call(self, provider: str, action: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """Call the platform proxy.

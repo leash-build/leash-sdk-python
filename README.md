@@ -1,6 +1,13 @@
 # Leash SDK (Python)
 
-Python SDK for accessing platform integrations (Gmail, Google Calendar, Google Drive) from apps deployed on [Leash](https://leash.build).
+Python SDK for accessing Leash-hosted integrations and MCP-backed tools.
+
+This SDK talks to the Leash platform proxy, which handles:
+
+- OAuth token storage
+- provider routing
+- MCP execution
+- app env lookup
 
 ## Install
 
@@ -8,31 +15,67 @@ Python SDK for accessing platform integrations (Gmail, Google Calendar, Google D
 pip install leash-sdk
 ```
 
-## Usage
+## Quick Start
 
 ```python
 from leash import LeashIntegrations
 
-# Get the auth token from the leash-auth cookie (e.g. in Flask/Django)
-integrations = LeashIntegrations(auth_token="your-jwt-token")
-
-# Gmail
-emails = integrations.gmail.list_messages(max_results=10)
-integrations.gmail.send_message(to="user@example.com", subject="Hello", body="World")
-
-# Calendar
-events = integrations.calendar.list_events(time_min="2026-04-01T00:00:00Z")
-integrations.calendar.create_event(
-    summary="Meeting",
-    start="2026-04-10T10:00:00Z",
-    end="2026-04-10T11:00:00Z",
+client = LeashIntegrations(
+    auth_token="your-platform-jwt",
+    api_key="optional-app-api-key",
 )
 
-# Drive
-files = integrations.drive.list_files(max_results=10)
-integrations.drive.upload_file(name="notes.txt", content="hello", mime_type="text/plain")
+messages = client.gmail.list_messages(max_results=10)
+events = client.calendar.list_events(time_min="2026-04-01T00:00:00Z")
+files = client.drive.list_files(max_results=10)
+
+env = client.get_env()
+connected = client.is_connected("gmail")
 ```
 
-## How it works
+## Default Platform URL
 
-The SDK calls the Leash platform proxy at `https://leash.build/api/integrations/{provider}/{action}`. The platform handles all OAuth token management -- the SDK just passes the user's auth token and makes typed API calls.
+The default platform base URL is:
+
+- `https://leash.build`
+
+Requests are sent to routes such as:
+
+- `https://leash.build/api/integrations/{provider}/{action}`
+- `https://leash.build/api/apps/env`
+- `https://leash.build/api/mcp/run`
+
+## Supported Client Features
+
+- Gmail actions
+- Google Calendar actions
+- Google Drive actions
+- generic provider calls
+- custom integration proxy calls
+- connection status lookup
+- connect URL generation
+- app env fetch and caching
+- MCP package execution via the platform
+
+## Example
+
+```python
+from leash import LeashIntegrations
+
+client = LeashIntegrations(auth_token="your-platform-jwt")
+
+if not client.is_connected("gmail"):
+    print(client.get_connect_url("gmail", return_url="https://myapp.example.com/settings"))
+else:
+    print(client.gmail.list_messages(max_results=5))
+```
+
+## Notes
+
+- `auth_token` should be a valid Leash platform JWT.
+- `api_key` is optional, but useful for app-scoped env access and service-to-service usage.
+- The SDK does not manage provider OAuth itself. It delegates that to the Leash platform.
+
+## License
+
+Apache-2.0

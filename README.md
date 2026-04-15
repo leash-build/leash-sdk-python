@@ -35,4 +35,4 @@ integrations.drive.upload_file(name="notes.txt", content="hello", mime_type="tex
 
 ## How it works
 
-The SDK calls the Leash platform proxy at `https://api.leash.build/api/integrations/{provider}/{action}`. The platform handles all OAuth token management -- the SDK just passes the user's auth token and makes typed API calls.
+The SDK calls the Leash platform proxy at `https://leash.build/api/integrations/{provider}/{action}`. The platform handles all OAuth token management -- the SDK just passes the user's auth token and makes typed API calls.

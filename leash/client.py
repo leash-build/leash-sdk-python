@@ -11,7 +11,7 @@ from leash.drive import DriveClient
 from leash.gmail import GmailClient
 from leash.types import LeashError
 
-DEFAULT_PLATFORM_URL = "https://api.leash.build"
+DEFAULT_PLATFORM_URL = "https://leash.build"
 
 
 class LeashIntegrations:
@@ -20,7 +20,7 @@ class LeashIntegrations:
     Args:
         auth_token: The leash-auth JWT token (from cookie or env).
         platform_url: Base URL of the Leash platform API.
-            Defaults to https://api.leash.build.
+            Defaults to https://leash.build.
         api_key: Optional API key for server-to-server authentication.
     """
 

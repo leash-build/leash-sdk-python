@@ -14,3 +14,5 @@ leash_sdk.egg-info/SOURCES.txt
 leash_sdk.egg-info/dependency_links.txt
 leash_sdk.egg-info/requires.txt
 leash_sdk.egg-info/top_level.txt
+tests/__init__.py
+tests/test_client.py

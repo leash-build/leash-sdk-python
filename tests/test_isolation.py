@@ -104,7 +104,7 @@ class TestStaticImports:
                 "unittest", "builtins", "__future__",
             }
 
-        allowed_third_party = {"requests"}
+        allowed_third_party = {"requests", "jwt"}
         for pyfile in _collect_py_files(LEASH_PKG_DIR):
             imported = _imported_modules(pyfile)
             for mod in imported:
@@ -204,7 +204,7 @@ class TestDependencyIsolation:
             )
 
     def test_only_expected_dependencies(self):
-        """Dependencies should only contain 'requests'."""
+        """Dependencies should only contain 'requests' and 'PyJWT'."""
         with open(PYPROJECT_PATH) as fh:
             content = fh.read()
 
@@ -227,7 +227,7 @@ class TestDependencyIsolation:
             deps = re.findall(r'"([^"]+)"', match.group(1))
 
         dep_names = [d.split(">")[0].split("<")[0].split("=")[0].split("[")[0].strip().lower() for d in deps]
-        allowed = {"requests"}
+        allowed = {"requests", "pyjwt"}
         unexpected = set(dep_names) - allowed
         assert not unexpected, (
             f"Unexpected dependencies in pyproject.toml: {unexpected}"

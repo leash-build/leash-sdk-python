@@ -70,6 +70,36 @@ else:
     print(client.gmail.list_messages(max_results=5))
 ```
 
+## Server Auth
+
+The SDK includes helpers for authenticating users on the server side by reading
+the `leash-auth` cookie set by the Leash platform.
+
+```python
+from leash import get_leash_user, is_authenticated
+
+# Flask
+@app.route('/me')
+def me():
+    user = get_leash_user(request)
+    return jsonify({'id': user.id, 'email': user.email, 'name': user.name})
+```
+
+You can also check authentication without extracting the full user:
+
+```python
+if is_authenticated(request):
+    # proceed
+```
+
+## MCP Calls
+
+Use the client to execute MCP-backed tools through the platform:
+
+```python
+result = client.run_mcp(package="@some/mcp-package", tool="tool-name", args={"key": "value"})
+```
+
 ## Notes
 
 - `auth_token` should be a valid Leash platform JWT.

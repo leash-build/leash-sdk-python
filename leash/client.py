@@ -9,7 +9,7 @@ from leash.calendar import CalendarClient
 from leash.custom import CustomIntegration
 from leash.drive import DriveClient
 from leash.gmail import GmailClient
-from leash.types import LeashError
+from leash.types import CustomMcpServerConfig, LeashError
 
 DEFAULT_PLATFORM_URL = "https://leash.build"
 
@@ -268,3 +268,81 @@ class LeashIntegrations:
             from urllib.parse import quote
             url += f"?return_url={quote(return_url)}"
         return url
+
+    def get_access_token(self, provider: str) -> str:
+        """Get the user's current access token for a provider.
+
+        Works for built-in providers (gmail, google_calendar, …) and
+        org-registered custom OAuth providers (LEA-142, e.g. slack, notion).
+        Lets you call third-party APIs directly without proxying every request
+        through Leash. Refresh-on-expiry happens transparently on the
+        platform side.
+
+        Args:
+            provider: The provider slug (e.g. 'slack', 'gmail').
+
+        Returns:
+            The access token string.
+
+        Raises:
+            LeashError: If the platform returns a non-success response. ``code``
+                is ``'not_connected'`` when the user hasn't completed the OAuth
+                flow for this provider.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+
+        response = requests.post(
+            f"{self.platform_url}/api/integrations/token",
+            json={"provider": provider},
+            headers=headers,
+        )
+        data = response.json()
+        if not data.get("success"):
+            raise LeashError(
+                message=data.get("error", "Unknown error"),
+                code=data.get("code"),
+                connect_url=data.get("connectUrl"),
+            )
+        return data.get("data", {}).get("accessToken")
+
+    def get_custom_mcp_config(self, slug: str) -> CustomMcpServerConfig:
+        """Get the resolved config for a customer-registered MCP server (LEA-143).
+
+        Returns the customer's MCP URL plus auth headers (``Authorization:
+        Bearer …`` for bearer-auth servers) — feed this directly into your
+        MCP client. Leash isn't on the MCP request path.
+
+        Args:
+            slug: The MCP server slug as registered in the org.
+
+        Returns:
+            A ``CustomMcpServerConfig`` dict with ``slug``, ``displayName``,
+            ``url``, and ``headers``.
+
+        Raises:
+            LeashError: If the platform returns a non-success response. ``code``
+                is ``'unknown_mcp_server'`` when no server is registered for
+                this slug.
+        """
+        from urllib.parse import quote
+
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+
+        response = requests.get(
+            f"{self.platform_url}/api/integrations/mcp-config/{quote(slug)}",
+            headers=headers,
+        )
+        data = response.json()
+        if not data.get("success"):
+            raise LeashError(
+                message=data.get("error", "Unknown error"),
+                code=data.get("code"),
+            )
+        return data.get("data")

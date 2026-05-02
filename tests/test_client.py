@@ -260,3 +260,105 @@ class TestMCP:
         client = LeashIntegrations(auth_token="t")
         with pytest.raises(LeashError):
             client.mcp("@mcp/nonexistent", "tool")
+
+
+class TestGetAccessToken:
+    @patch("leash.client.requests.post")
+    def test_returns_access_token(self, mock_post):
+        mock_post.return_value = _mock_response(
+            {"accessToken": "xoxb-slack-token", "provider": "slack"}
+        )
+
+        client = LeashIntegrations(
+            auth_token="jwt-token",
+            platform_url="https://test.leash.build",
+            api_key="api-key-123",
+        )
+        token = client.get_access_token("slack")
+
+        assert token == "xoxb-slack-token"
+        mock_post.assert_called_once()
+        url = mock_post.call_args[0][0]
+        assert url == "https://test.leash.build/api/integrations/token"
+        body = mock_post.call_args.kwargs.get("json") or mock_post.call_args[1].get("json")
+        assert body == {"provider": "slack"}
+        headers = mock_post.call_args.kwargs.get("headers") or mock_post.call_args[1].get("headers")
+        assert headers["Authorization"] == "Bearer jwt-token"
+        assert headers["X-API-Key"] == "api-key-123"
+        assert headers["Content-Type"] == "application/json"
+
+    @patch("leash.client.requests.post")
+    def test_raises_not_connected(self, mock_post):
+        mock_post.return_value = _mock_response(
+            {
+                "error": "Provider not connected",
+                "code": "not_connected",
+                "connectUrl": "/api/integrations/connect/slack",
+            },
+            success=False,
+        )
+
+        client = LeashIntegrations(auth_token="t")
+        with pytest.raises(LeashError) as exc_info:
+            client.get_access_token("slack")
+
+        assert exc_info.value.code == "not_connected"
+        assert exc_info.value.connect_url == "/api/integrations/connect/slack"
+
+
+class TestGetCustomMcpConfig:
+    @patch("leash.client.requests.get")
+    def test_returns_config(self, mock_get):
+        mock_get.return_value = _mock_response(
+            {
+                "slug": "linear",
+                "displayName": "Linear",
+                "url": "https://mcp.linear.app/sse",
+                "headers": {"Authorization": "Bearer linear-token"},
+            }
+        )
+
+        client = LeashIntegrations(
+            auth_token="jwt-token",
+            platform_url="https://test.leash.build",
+            api_key="api-key-123",
+        )
+        config = client.get_custom_mcp_config("linear")
+
+        assert config["slug"] == "linear"
+        assert config["displayName"] == "Linear"
+        assert config["url"] == "https://mcp.linear.app/sse"
+        assert config["headers"] == {"Authorization": "Bearer linear-token"}
+
+        mock_get.assert_called_once()
+        url = mock_get.call_args[0][0]
+        assert url == "https://test.leash.build/api/integrations/mcp-config/linear"
+        headers = mock_get.call_args.kwargs.get("headers") or mock_get.call_args[1].get("headers")
+        assert headers["Authorization"] == "Bearer jwt-token"
+        assert headers["X-API-Key"] == "api-key-123"
+
+    @patch("leash.client.requests.get")
+    def test_url_encodes_slug(self, mock_get):
+        mock_get.return_value = _mock_response(
+            {"slug": "my server", "displayName": "My Server", "url": "https://x", "headers": {}}
+        )
+
+        client = LeashIntegrations(auth_token="t", platform_url="https://test.leash.build")
+        client.get_custom_mcp_config("my server")
+
+        url = mock_get.call_args[0][0]
+        assert "my%20server" in url
+
+    @patch("leash.client.requests.get")
+    def test_raises_unknown_mcp_server(self, mock_get):
+        mock_get.return_value = _mock_response(
+            {"error": "Unknown MCP server", "code": "unknown_mcp_server"},
+            success=False,
+        )
+
+        client = LeashIntegrations(auth_token="t")
+        with pytest.raises(LeashError) as exc_info:
+            client.get_custom_mcp_config("nonexistent")
+
+        assert exc_info.value.code == "unknown_mcp_server"
+        assert "Unknown MCP server" in str(exc_info.value)

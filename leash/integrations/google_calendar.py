@@ -7,7 +7,7 @@ provider id, which is also ``google_calendar``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..types import CalendarEvent, CalendarEventList, CalendarList
 from .base import _BaseProvider
@@ -17,7 +17,7 @@ class GoogleCalendarIntegration(_BaseProvider):
     provider = "google_calendar"
 
     def list_calendars(self) -> CalendarList:
-        return self._call("list-calendars")  # type: ignore[return-value]
+        return cast(CalendarList, self._call("list-calendars"))
 
     def list_events(
         self,
@@ -45,7 +45,7 @@ class GoogleCalendarIntegration(_BaseProvider):
             params["singleEvents"] = single_events
         if order_by is not None:
             params["orderBy"] = order_by
-        return self._call("list-events", params or None)  # type: ignore[return-value]
+        return cast(CalendarEventList, self._call("list-events", params or None))
 
     def create_event(
         self,
@@ -67,13 +67,13 @@ class GoogleCalendarIntegration(_BaseProvider):
             params["location"] = location
         if attendees is not None:
             params["attendees"] = attendees
-        return self._call("create-event", params)  # type: ignore[return-value]
+        return cast(CalendarEvent, self._call("create-event", params))
 
     def get_event(self, event_id: str, *, calendar_id: Optional[str] = None) -> CalendarEvent:
         params: Dict[str, Any] = {"eventId": event_id}
         if calendar_id is not None:
             params["calendarId"] = calendar_id
-        return self._call("get-event", params)  # type: ignore[return-value]
+        return cast(CalendarEvent, self._call("get-event", params))
 
 
 __all__ = ["GoogleCalendarIntegration"]

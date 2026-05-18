@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 from http.cookies import SimpleCookie
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from .errors import LeashError
 from .types import LeashJWTPayload, LeashUser
@@ -43,7 +43,7 @@ def _get_attr(obj: Any, name: str) -> Any:
     except Exception:
         pass
     try:
-        return obj[name]  # type: ignore[index]
+        return obj[name]
     except Exception:
         return None
 
@@ -65,7 +65,7 @@ def _normalise_cookie_value(value: Any) -> Optional[str]:
         return morsel_value
     # Dict-like with a 'value' key (Next.js RequestCookie shape, defensive)
     try:
-        candidate = value["value"]  # type: ignore[index]
+        candidate = value["value"]
         if isinstance(candidate, str):
             return candidate
     except Exception:
@@ -95,7 +95,7 @@ def _from_cookie_jar(request: Any, name: str) -> Optional[str]:
             except Exception:
                 pass
         try:
-            val = cookies[name]  # type: ignore[index]
+            val = cookies[name]
             normalised = _normalise_cookie_value(val)
             if normalised is not None:
                 return normalised
@@ -176,7 +176,7 @@ def _header_lookup(headers: Any, name: str) -> Optional[str]:
             pass
 
     try:
-        for key, value in headers.items():  # type: ignore[union-attr]
+        for key, value in headers.items():
             if isinstance(key, str) and key.lower() == lname and isinstance(value, str):
                 return value
     except Exception:
@@ -221,9 +221,9 @@ def extract_bearer_token(request: Any) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _import_jwt():  # pragma: no cover - import wrapper
+def _import_jwt() -> Any:  # pragma: no cover - import wrapper
     try:
-        import jwt  # type: ignore
+        import jwt
 
         return jwt
     except ImportError as exc:
@@ -254,9 +254,9 @@ def decode_token(token: str) -> LeashJWTPayload:
 
     try:
         if secret:
-            return jwt.decode(token, secret, algorithms=["HS256"])
-        return jwt.decode(token, options={"verify_signature": False})
-    except jwt.ExpiredSignatureError as exc:  # type: ignore[attr-defined]
+            return cast(LeashJWTPayload, jwt.decode(token, secret, algorithms=["HS256"]))
+        return cast(LeashJWTPayload, jwt.decode(token, options={"verify_signature": False}))
+    except jwt.ExpiredSignatureError as exc:
         raise LeashError(
             code="NO_AUTH_CONTEXT",
             message="leash-auth cookie has expired.",
@@ -264,7 +264,7 @@ def decode_token(token: str) -> LeashJWTPayload:
             see_also="https://leash.build/docs/sdk",
             cause=exc,
         ) from exc
-    except jwt.InvalidTokenError as exc:  # type: ignore[attr-defined]
+    except jwt.InvalidTokenError as exc:
         raise LeashError(
             code="NO_AUTH_CONTEXT",
             message=f"Invalid leash-auth cookie: {exc}",

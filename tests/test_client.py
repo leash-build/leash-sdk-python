@@ -86,21 +86,35 @@ class TestRequestShapes:
 
 
 class TestBearerToken:
-    def test_extracts_authorization_header(
+    def test_extracted_but_not_forwarded_on_integration_calls(
         self, token, http_client_factory, monkeypatch
     ) -> None:
+        """Bearer token is captured off the request but NOT sent to integrations.
+
+        Matches the TS SDK contract (leash-sdk-ts/src/leash.ts:586-601). The
+        platform's verifyToken() can reject a user JWT before X-API-Key is
+        checked, so integration POSTs intentionally carry only X-API-Key +
+        Cookie.
+        """
         from types import SimpleNamespace
 
-        # No API key, no cookie - only the Authorization header.
         monkeypatch.delenv("LEASH_API_KEY", raising=False)
         req = SimpleNamespace(cookies={}, headers={"Authorization": f"Bearer {token}"})
         client, capture = http_client_factory(
             {("POST", "/api/integrations/gmail/list-messages"): (200, {"success": True, "data": {"messages": []}})}
         )
         with Leash(request=req, http_client=client) as leash:
+            # The bearer token IS captured off the request (used by other code
+            # paths) — but the integration call must not echo it.
+            assert leash._bearer_token == token
             leash.integrations.gmail.list_messages()
         assert len(capture.requests) == 1
-        assert capture.requests[0].headers.get("authorization") == f"Bearer {token}"
+        sent = capture.requests[0].headers
+        assert sent.get("authorization") is None
+        # No api key either (we didn't set one) — only the cookie path would
+        # carry auth here, and we sent no cookie. Verifies the integration call
+        # surface stays minimal.
+        assert sent.get("x-api-key") is None
 
 
 class TestApiKeyPrecedence:
@@ -186,6 +200,13 @@ class TestExports:
             assert hasattr(leash.integrations, "google_drive")
             assert hasattr(leash.integrations, "linear")
             assert isinstance(leash.integrations.provider("slack"), IntegrationCaller)
+
+    def test_ts_aliases_share_instance(self, flask_request, http_client_factory) -> None:
+        """`calendar` / `drive` aliases match the TS surface."""
+        client, _ = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            assert leash.integrations.calendar is leash.integrations.google_calendar
+            assert leash.integrations.drive is leash.integrations.google_drive
 
     def test_version_is_0_4(self) -> None:
         import leash

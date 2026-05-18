@@ -111,6 +111,15 @@ slack = leash.integrations.provider("slack")
 slack.call("post-message", {"channel": "#general", "text": "hi"})
 ```
 
+#### Naming differences vs the TypeScript SDK
+
+The TS SDK exposes `leash.integrations.calendar` and `leash.integrations.drive`.
+The Python SDK uses the longer `google_calendar` and `google_drive` names so
+they match the platform's `integration_providers.id` values (and so `calendar`
+doesn't shadow the stdlib `calendar` module). The short TS names are wired up
+as aliases — `leash.integrations.calendar` and `leash.integrations.drive` both
+work and point to the same instances.
+
 ## Errors
 
 Every SDK call raises a single error type: `LeashError`. It carries a
@@ -123,7 +132,7 @@ from leash import Leash, LeashError
 try:
     leash.integrations.gmail.list_messages()
 except LeashError as err:
-    if err.code == "CONNECTION_REQUIRED":
+    if err.code == "INTEGRATION_NOT_ENABLED":
         print("Connect Gmail at:", err.see_also)
     elif err.code == "UPGRADE_REQUIRED":
         print("Upgrade required:", err.message)
@@ -134,8 +143,18 @@ except LeashError as err:
 Known codes: `NO_API_KEY`, `NO_REQUEST_SERVER_CONSTRUCT`, `UNAUTHORIZED`,
 `NO_AUTH_CONTEXT`, `INTEGRATION_NOT_ENABLED`, `INTEGRATION_ERROR`,
 `UPGRADE_REQUIRED`, `NETWORK_ERROR`, `KEY_NOT_DECLARED`, `INVALID_KEY`,
-`SOURCE_RESYNC_FAILED`, `ENV_FETCH_ERROR`, `CONNECTION_REQUIRED`,
-`PLAN_BLOCK`.
+`SOURCE_RESYNC_FAILED`, `ENV_FETCH_ERROR`.
+
+## What's NOT in 0.4 yet
+
+- `Leash.create_dev_auth_handler()` — the local dev cookie-exchange helper
+  from the TS SDK isn't yet implemented in Python (per-framework response
+  types make a clean cross-framework version nontrivial). Tracked: LEA-262.
+- `LeashIntegrations` legacy helpers (`is_connected`, `get_connections`,
+  `get_connect_url`, etc.) — these were 0.3-era patterns. The TS SDK 0.4
+  also dropped them. If you need them, file an issue.
+- Async surface — sync only in 0.4.0. Wrap with `asyncio.to_thread(...)`
+  for async code; native async coming in 0.4.1+ if demand justifies.
 
 ## Sync only in 0.4
 

@@ -7,7 +7,7 @@ array vs. ``{ issues, cursor }`` envelope.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..types import (
     LinearComment,
@@ -47,16 +47,16 @@ class LinearIntegration(_BaseProvider):
 
         raw = self._call("list_issues", params)
         if isinstance(raw, list):
-            return {"issues": raw}  # type: ignore[return-value]
+            return cast(LinearListIssuesResult, {"issues": raw})
         if isinstance(raw, dict):
             out: Dict[str, Any] = {"issues": raw.get("issues", [])}
             if "cursor" in raw and raw["cursor"] is not None:
                 out["cursor"] = raw["cursor"]
-            return out  # type: ignore[return-value]
-        return {"issues": []}  # type: ignore[return-value]
+            return cast(LinearListIssuesResult, out)
+        return cast(LinearListIssuesResult, {"issues": []})
 
     def get_issue(self, id: str) -> LinearIssue:
-        return self._call("get_issue", {"id": id})  # type: ignore[return-value]
+        return cast(LinearIssue, self._call("get_issue", {"id": id}))
 
     def create_issue(
         self,
@@ -77,7 +77,7 @@ class LinearIntegration(_BaseProvider):
             params["priority"] = priority
         if label_ids is not None:
             params["labelIds"] = label_ids
-        return self._call("create_issue", params)  # type: ignore[return-value]
+        return cast(LinearIssue, self._call("create_issue", params))
 
     def update_issue(
         self,
@@ -103,17 +103,17 @@ class LinearIntegration(_BaseProvider):
             params["labelIds"] = label_ids
         if team_id is not None:
             params["teamId"] = team_id
-        return self._call("update_issue", params)  # type: ignore[return-value]
+        return cast(LinearIssue, self._call("update_issue", params))
 
     def add_comment(self, issue_id: str, body: str) -> LinearComment:
-        return self._call("add_comment", {"issueId": issue_id, "body": body})  # type: ignore[return-value]
+        return cast(LinearComment, self._call("add_comment", {"issueId": issue_id, "body": body}))
 
     def list_teams(self) -> List[LinearTeam]:
         raw = self._call("list_teams", {})
         if isinstance(raw, list):
-            return raw  # type: ignore[return-value]
+            return cast(List[LinearTeam], raw)
         if isinstance(raw, dict):
-            return raw.get("teams", [])  # type: ignore[return-value]
+            return cast(List[LinearTeam], raw.get("teams", []))
         return []
 
     def list_projects(self, *, team_id: Optional[str] = None) -> List[LinearProject]:
@@ -122,9 +122,9 @@ class LinearIntegration(_BaseProvider):
             params["teamId"] = team_id
         raw = self._call("list_projects", params)
         if isinstance(raw, list):
-            return raw  # type: ignore[return-value]
+            return cast(List[LinearProject], raw)
         if isinstance(raw, dict):
-            return raw.get("projects", [])  # type: ignore[return-value]
+            return cast(List[LinearProject], raw.get("projects", []))
         return []
 
 

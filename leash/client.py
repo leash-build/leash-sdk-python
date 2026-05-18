@@ -136,11 +136,13 @@ class Leash:
             http_client = httpx.Client(timeout=DEFAULT_TIMEOUT_S)
         self._http = http_client
 
+        # Note: bearer token is intentionally NOT passed to the integrations
+        # transport — see _Transport docstring. It's still extracted off the
+        # request for other code paths (e.g. future CLI/agent flows).
         self._transport = _Transport(
             platform_url=self._platform_url,
             api_key=self._api_key,
             cookie_value=self._cookie_value,
-            bearer_token=self._bearer_token,
             http_client=self._http,
         )
 

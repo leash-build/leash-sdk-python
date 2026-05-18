@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from ..types import GmailLabelList, GmailMessageList
 from .base import _BaseProvider
@@ -30,10 +30,10 @@ class GmailIntegration(_BaseProvider):
             params["labelIds"] = label_ids
         if page_token is not None:
             params["pageToken"] = page_token
-        return self._call("list-messages", params or None)  # type: ignore[return-value]
+        return cast(GmailMessageList, self._call("list-messages", params or None))
 
     def get_message(self, message_id: str, *, format: GmailFormat = "full") -> Dict[str, Any]:
-        return self._call("get-message", {"messageId": message_id, "format": format})  # type: ignore[return-value]
+        return cast(Dict[str, Any], self._call("get-message", {"messageId": message_id, "format": format}))
 
     def send_message(
         self,
@@ -49,7 +49,7 @@ class GmailIntegration(_BaseProvider):
             params["cc"] = cc
         if bcc is not None:
             params["bcc"] = bcc
-        return self._call("send-message", params)  # type: ignore[return-value]
+        return cast(Dict[str, Any], self._call("send-message", params))
 
     def search_messages(
         self, query: str, *, max_results: Optional[int] = None
@@ -57,13 +57,13 @@ class GmailIntegration(_BaseProvider):
         params: Dict[str, Any] = {"query": query}
         if max_results is not None:
             params["maxResults"] = max_results
-        return self._call("search-messages", params)  # type: ignore[return-value]
+        return cast(GmailMessageList, self._call("search-messages", params))
 
     def list_labels(self) -> GmailLabelList:
-        return self._call("list-labels")  # type: ignore[return-value]
+        return cast(GmailLabelList, self._call("list-labels"))
 
     def get_profile(self) -> Dict[str, Any]:
-        return self._call("get-profile")  # type: ignore[return-value]
+        return cast(Dict[str, Any], self._call("get-profile"))
 
 
 __all__ = ["GmailIntegration"]

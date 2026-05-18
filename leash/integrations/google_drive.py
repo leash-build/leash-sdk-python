@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from ..types import DriveFile, DriveFileList
 from .base import _BaseProvider
@@ -25,10 +25,10 @@ class GoogleDriveIntegration(_BaseProvider):
             params["maxResults"] = max_results
         if folder_id is not None:
             params["folderId"] = folder_id
-        return self._call("list-files", params or None)  # type: ignore[return-value]
+        return cast(DriveFileList, self._call("list-files", params or None))
 
     def get_file(self, file_id: str) -> DriveFile:
-        return self._call("get-file", {"fileId": file_id})  # type: ignore[return-value]
+        return cast(DriveFile, self._call("get-file", {"fileId": file_id}))
 
     def download_file(self, file_id: str) -> Any:
         return self._call("download-file", {"fileId": file_id})
@@ -37,7 +37,7 @@ class GoogleDriveIntegration(_BaseProvider):
         params: Dict[str, Any] = {"name": name}
         if parent_id is not None:
             params["parentId"] = parent_id
-        return self._call("create-folder", params)  # type: ignore[return-value]
+        return cast(DriveFile, self._call("create-folder", params))
 
     def upload_file(
         self,
@@ -50,7 +50,7 @@ class GoogleDriveIntegration(_BaseProvider):
         params: Dict[str, Any] = {"name": name, "content": content, "mimeType": mime_type}
         if parent_id is not None:
             params["parentId"] = parent_id
-        return self._call("upload-file", params)  # type: ignore[return-value]
+        return cast(DriveFile, self._call("upload-file", params))
 
     def delete_file(self, file_id: str) -> Any:
         return self._call("delete-file", {"fileId": file_id})
@@ -59,7 +59,7 @@ class GoogleDriveIntegration(_BaseProvider):
         params: Dict[str, Any] = {"query": query}
         if max_results is not None:
             params["maxResults"] = max_results
-        return self._call("search-files", params)  # type: ignore[return-value]
+        return cast(DriveFileList, self._call("search-files", params))
 
 
 __all__ = ["GoogleDriveIntegration"]

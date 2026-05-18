@@ -18,18 +18,18 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class _Transport:
     """Wraps the shared ``httpx.Client`` + auth headers.
 
-    The platform contract (see leash-sdk-ts/src/leash.ts lines 591–597):
+    The platform contract for integration calls (matches
+    leash-sdk-ts/src/leash.ts lines 586–601):
 
     * ``X-API-Key`` carries the app key (``LEASH_API_KEY``)
-    * ``Authorization: Bearer …`` carries the **user JWT** — extracted from
-      ``Authorization`` header on the inbound request, NOT the API key
     * ``Cookie: leash-auth=…`` forwards the browser session
 
-    Auth precedence on inbound requests:
-
-    1. ``LEASH_API_KEY`` env var (server)
-    2. ``Authorization: Bearer <jwt>`` header (CLI / agent)
-    3. ``leash-auth`` cookie (browser → deployed app)
+    The user JWT extracted from an inbound ``Authorization: Bearer …``
+    header is intentionally NOT forwarded — the TS SDK warns that the JWT
+    path can cause platform-side ``verifyToken()`` to reject before the
+    X-API-Key is checked. Bearer tokens are still accepted by ``Leash``
+    for other code paths (e.g. CLI agent flows) but never sent on
+    integration POSTs.
     """
 
     def __init__(
@@ -38,13 +38,11 @@ class _Transport:
         platform_url: str,
         api_key: Optional[str],
         cookie_value: Optional[str],
-        bearer_token: Optional[str],
         http_client: "httpx.Client",
     ) -> None:
         self.platform_url = platform_url
         self.api_key = api_key
         self.cookie_value = cookie_value
-        self.bearer_token = bearer_token
         self._http = http_client
 
     def call(
@@ -68,8 +66,6 @@ class _Transport:
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
-        if self.bearer_token:
-            headers["Authorization"] = f"Bearer {self.bearer_token}"
         if self.cookie_value:
             headers["Cookie"] = f"leash-auth={self.cookie_value}"
 
@@ -102,9 +98,12 @@ class _Transport:
         if isinstance(body, dict):
             # Platform contract: { success, data } OR { data } OR raw shape.
             if body.get("success") is False:
-                err_msg = body.get("error") if isinstance(body.get("error"), str) else "Integration error"
+                err_val = body.get("error")
+                err_msg: str = err_val if isinstance(err_val, str) else "Integration error"
+                code_val = body.get("code")
+                code: str = code_val if isinstance(code_val, str) else "INTEGRATION_ERROR"
                 raise LeashError(
-                    code=body.get("code") if isinstance(body.get("code"), str) else "INTEGRATION_ERROR",
+                    code=code,
                     message=err_msg or "Integration error",
                     action="Check your integration configuration and try again.",
                     see_also=docs_url,
@@ -139,9 +138,8 @@ class _Transport:
             )
 
         if status == 402:
-            msg = body.get("message") if isinstance(body, dict) and isinstance(body.get("message"), str) else (
-                "This feature requires a higher plan."
-            )
+            msg_val = body.get("message") if isinstance(body, dict) else None
+            msg: str = msg_val if isinstance(msg_val, str) else "This feature requires a higher plan."
             raise LeashError(
                 code="UPGRADE_REQUIRED",
                 message=msg,
@@ -224,6 +222,11 @@ class IntegrationsNamespace:
         self.google_calendar = GoogleCalendarIntegration(transport)
         self.google_drive = GoogleDriveIntegration(transport)
         self.linear = LinearIntegration(transport)
+        # Aliases matching the TS surface (leash.integrations.calendar, .drive).
+        # The long names are canonical (match the platform's provider IDs);
+        # these aliases point to the same instances so either name works.
+        self.calendar = self.google_calendar
+        self.drive = self.google_drive
 
     # Generic escape hatch for un-typed providers.
     def provider(self, name: str) -> IntegrationCaller:

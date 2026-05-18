@@ -32,3 +32,6 @@ include = ["leash*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.mypy]
+strict = true

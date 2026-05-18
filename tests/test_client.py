@@ -1,364 +1,231 @@
-"""Tests for LeashIntegrations client.
+"""Tests for the unified :class:`Leash` client.
 
 Covers:
-- Import works without optional deps
-- Auth headers sent correctly
-- API key from env var
-- Error handling (LeashError)
-- Env caching
-- Provider client wiring (gmail, calendar, drive)
-- Connection status
-- MCP calls
+
+    - Constructor requires a request object (mirrors TS NO_REQUEST_SERVER_CONSTRUCT)
+    - All four request shapes (Flask, Django, FastAPI/Starlette, raw dict)
+      yield the same authenticated user
+    - Authorization: Bearer header is captured into the bearer namespace
+    - LEASH_API_KEY env-var precedence + explicit-arg override
+    - LEASH_PLATFORM_URL env-var override
+    - Context-manager and ``close()`` lifecycle
+    - Public exports match the 0.4 surface
 """
 
-import os
-from unittest.mock import patch, MagicMock
+from __future__ import annotations
+
 import pytest
 
-from leash import LeashIntegrations, LeashError
+from leash import (
+    IntegrationCaller,
+    Leash,
+    LeashError,
+    LeashUser,
+    get_leash_user,
+    is_authenticated,
+)
 
 
-def _mock_response(data, success=True, status_code=200):
-    """Create a mock requests.Response."""
-    resp = MagicMock()
-    body = {"success": success}
-    if success:
-        body["data"] = data
-    else:
-        body["error"] = data.get("error", "Unknown error")
-        body["code"] = data.get("code")
-        body["connectUrl"] = data.get("connectUrl")
-    resp.json.return_value = body
-    resp.status_code = status_code
-    return resp
+def test_requires_request() -> None:
+    with pytest.raises(LeashError) as info:
+        Leash()  # type: ignore[call-arg]
+    assert info.value.code == "NO_REQUEST_SERVER_CONSTRUCT"
 
 
-class TestImports:
-    """Verify the SDK can be imported cleanly."""
+class TestRequestShapes:
+    """Every framework request shape yields the same authenticated user."""
 
-    def test_import_main(self):
-        from leash import LeashIntegrations, CustomIntegration, LeashError
-        assert LeashIntegrations is not None
-        assert CustomIntegration is not None
+    def test_flask_request(self, flask_request, http_client_factory) -> None:
+        client, _ = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            user = leash.auth.user()
+        assert isinstance(user, LeashUser)
+        assert user.id == "user-123"
+        assert user.email == "alice@example.com"
+
+    def test_django_request(self, django_request, http_client_factory) -> None:
+        client, _ = http_client_factory()
+        with Leash(request=django_request, http_client=client) as leash:
+            user = leash.auth.user()
+        assert user is not None
+        assert user.id == "user-123"
+
+    def test_django_meta_only_request(self, token, http_client_factory) -> None:
+        """Older Django wrappers expose only META — verify the fallback path."""
+        from types import SimpleNamespace
+
+        req = SimpleNamespace(META={"HTTP_COOKIE": f"leash-auth={token}"}, headers={})
+        client, _ = http_client_factory()
+        with Leash(request=req, http_client=client) as leash:
+            user = leash.auth.user()
+        assert user is not None
+        assert user.email == "alice@example.com"
+
+    def test_fastapi_request(self, fastapi_request, http_client_factory) -> None:
+        client, _ = http_client_factory()
+        with Leash(request=fastapi_request, http_client=client) as leash:
+            user = leash.auth.user()
+        assert user is not None
+        assert user.id == "user-123"
+
+    def test_plain_dict_request(self, header_dict_request, http_client_factory) -> None:
+        client, _ = http_client_factory()
+        with Leash(request=header_dict_request, http_client=client) as leash:
+            user = leash.auth.user()
+        assert user is not None
+        assert user.id == "user-123"
+
+    def test_request_without_cookie_returns_none(self, http_client_factory) -> None:
+        from types import SimpleNamespace
+
+        req = SimpleNamespace(cookies={}, headers={})
+        client, _ = http_client_factory()
+        with Leash(request=req, http_client=client) as leash:
+            assert leash.auth.user() is None
+            assert leash.auth.is_authenticated() is False
+
+
+class TestBearerToken:
+    def test_extracted_but_not_forwarded_on_integration_calls(
+        self, token, http_client_factory, monkeypatch
+    ) -> None:
+        """Bearer token is captured off the request but NOT sent to integrations.
+
+        Matches the TS SDK contract (leash-sdk-ts/src/leash.ts:586-601). The
+        platform's verifyToken() can reject a user JWT before X-API-Key is
+        checked, so integration POSTs intentionally carry only X-API-Key +
+        Cookie.
+        """
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("LEASH_API_KEY", raising=False)
+        req = SimpleNamespace(cookies={}, headers={"Authorization": f"Bearer {token}"})
+        client, capture = http_client_factory(
+            {("POST", "/api/integrations/gmail/list-messages"): (200, {"success": True, "data": {"messages": []}})}
+        )
+        with Leash(request=req, http_client=client) as leash:
+            # The bearer token IS captured off the request (used by other code
+            # paths) — but the integration call must not echo it.
+            assert leash._bearer_token == token
+            leash.integrations.gmail.list_messages()
+        assert len(capture.requests) == 1
+        sent = capture.requests[0].headers
+        assert sent.get("authorization") is None
+        # No api key either (we didn't set one) — only the cookie path would
+        # carry auth here, and we sent no cookie. Verifies the integration call
+        # surface stays minimal.
+        assert sent.get("x-api-key") is None
+
+
+class TestApiKeyPrecedence:
+    def test_explicit_arg_wins(self, flask_request, http_client_factory, monkeypatch) -> None:
+        monkeypatch.setenv("LEASH_API_KEY", "env-key")
+        client, capture = http_client_factory(
+            {("POST", "/api/integrations/gmail/list-messages"): (200, {"success": True, "data": {}})}
+        )
+        with Leash(request=flask_request, api_key="explicit-key", http_client=client) as leash:
+            leash.integrations.gmail.list_messages()
+        assert capture.requests[0].headers.get("x-api-key") == "explicit-key"
+
+    def test_env_var_used_when_arg_missing(
+        self, flask_request, http_client_factory, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("LEASH_API_KEY", "env-key")
+        client, capture = http_client_factory(
+            {("POST", "/api/integrations/gmail/list-messages"): (200, {"success": True, "data": {}})}
+        )
+        with Leash(request=flask_request, http_client=client) as leash:
+            leash.integrations.gmail.list_messages()
+        assert capture.requests[0].headers.get("x-api-key") == "env-key"
+
+
+class TestPlatformUrl:
+    def test_default(self, flask_request, http_client_factory, monkeypatch) -> None:
+        monkeypatch.delenv("LEASH_PLATFORM_URL", raising=False)
+        client, capture = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            leash.integrations.gmail.list_messages()
+        url = str(capture.requests[0].url)
+        assert url.startswith("https://leash.build/")
+
+    def test_env_var_override(self, flask_request, http_client_factory, monkeypatch) -> None:
+        monkeypatch.setenv("LEASH_PLATFORM_URL", "https://staging.leash.build/")
+        client, capture = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            leash.integrations.gmail.list_messages()
+        url = str(capture.requests[0].url)
+        assert url.startswith("https://staging.leash.build/")
+
+    def test_explicit_arg_wins(self, flask_request, http_client_factory, monkeypatch) -> None:
+        monkeypatch.setenv("LEASH_PLATFORM_URL", "https://env.leash.build")
+        client, capture = http_client_factory()
+        with Leash(
+            request=flask_request,
+            platform_url="https://explicit.leash.build/",
+            http_client=client,
+        ) as leash:
+            leash.integrations.gmail.list_messages()
+        url = str(capture.requests[0].url)
+        assert url.startswith("https://explicit.leash.build/")
+
+
+class TestForwardedCookie:
+    def test_cookie_forwarded_to_platform(
+        self, flask_request, http_client_factory, token
+    ) -> None:
+        client, capture = http_client_factory(
+            {("POST", "/api/integrations/gmail/list-messages"): (200, {"success": True, "data": {}})}
+        )
+        with Leash(request=flask_request, http_client=client) as leash:
+            leash.integrations.gmail.list_messages()
+        cookie_header = capture.requests[0].headers.get("cookie", "")
+        assert f"leash-auth={token}" in cookie_header
+
+
+class TestExports:
+    def test_public_surface(self) -> None:
+        # Should not raise — and they should be the canonical objects.
+        assert Leash is not None
         assert LeashError is not None
-
-    def test_no_framework_dependency(self):
-        """SDK should not import Flask, Django, FastAPI, or any web framework."""
-        import leash.client
-        import sys
-        for mod in ["flask", "django", "fastapi", "starlette"]:
-            assert mod not in sys.modules, f"{mod} was imported by the SDK"
-
-
-class TestClientInit:
-    def test_default_platform_url(self):
-        client = LeashIntegrations(auth_token="test-token")
-        assert client.platform_url == "https://leash.build"
-
-    def test_custom_platform_url(self):
-        client = LeashIntegrations(auth_token="test-token", platform_url="https://staging.leash.build/")
-        assert client.platform_url == "https://staging.leash.build"  # trailing slash stripped
-
-    def test_api_key_from_constructor(self):
-        client = LeashIntegrations(auth_token="test-token", api_key="my-key")
-        assert client.api_key == "my-key"
-
-    def test_api_key_from_env(self):
-        with patch.dict(os.environ, {"LEASH_API_KEY": "env-key"}):
-            client = LeashIntegrations(auth_token="test-token")
-            assert client.api_key == "env-key"
-
-    def test_constructor_api_key_overrides_env(self):
-        with patch.dict(os.environ, {"LEASH_API_KEY": "env-key"}):
-            client = LeashIntegrations(auth_token="test-token", api_key="explicit-key")
-            assert client.api_key == "explicit-key"
-
-
-class TestAuthHeaders:
-    @patch("leash.client.requests.post")
-    def test_sends_auth_and_api_key_headers(self, mock_post):
-        mock_post.return_value = _mock_response({"ok": True})
-
-        client = LeashIntegrations(
-            auth_token="jwt-token",
-            platform_url="https://test.leash.build",
-            api_key="api-key-123",
-        )
-        client._call("gmail", "list-messages", {"maxResults": 5})
-
-        mock_post.assert_called_once()
-        call_kwargs = mock_post.call_args
-        headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
-        assert headers["Authorization"] == "Bearer jwt-token"
-        assert headers["X-API-Key"] == "api-key-123"
-        assert headers["Content-Type"] == "application/json"
-
-    @patch("leash.client.requests.post")
-    def test_url_construction(self, mock_post):
-        mock_post.return_value = _mock_response({"ok": True})
-
-        client = LeashIntegrations(auth_token="t", platform_url="https://test.leash.build")
-        client._call("gmail", "list-messages")
-
-        url = mock_post.call_args[0][0]
-        assert url == "https://test.leash.build/api/integrations/gmail/list-messages"
-
-
-class TestProviderClients:
-    @patch("leash.client.requests.post")
-    def test_gmail_list_messages(self, mock_post):
-        mock_post.return_value = _mock_response([{"id": "msg-1"}])
-
-        client = LeashIntegrations(auth_token="t")
-        result = client.gmail.list_messages(max_results=5)
-
-        assert result == [{"id": "msg-1"}]
-        url = mock_post.call_args[0][0]
-        assert "/gmail/list-messages" in url
-
-    @patch("leash.client.requests.post")
-    def test_calendar_list_events(self, mock_post):
-        mock_post.return_value = _mock_response([{"id": "evt-1"}])
-
-        client = LeashIntegrations(auth_token="t")
-        result = client.calendar.list_events()
-
-        assert result == [{"id": "evt-1"}]
-        url = mock_post.call_args[0][0]
-        assert "/google_calendar/list-events" in url
-
-    @patch("leash.client.requests.post")
-    def test_drive_list_files(self, mock_post):
-        mock_post.return_value = _mock_response([{"id": "file-1"}])
-
-        client = LeashIntegrations(auth_token="t")
-        result = client.drive.list_files()
-
-        assert result == [{"id": "file-1"}]
-        url = mock_post.call_args[0][0]
-        assert "/google_drive/list-files" in url
-
-
-class TestErrorHandling:
-    @patch("leash.client.requests.post")
-    def test_raises_leash_error_on_failure(self, mock_post):
-        mock_post.return_value = _mock_response(
-            {"error": "Not connected", "code": "not_connected", "connectUrl": "/connect/gmail"},
-            success=False,
-        )
-
-        client = LeashIntegrations(auth_token="t")
-
-        with pytest.raises(LeashError) as exc_info:
-            client._call("gmail", "list-messages")
-
-        assert "Not connected" in str(exc_info.value)
-        assert exc_info.value.code == "not_connected"
-
-    @patch("leash.client.requests.post")
-    def test_leash_error_has_connect_url(self, mock_post):
-        mock_post.return_value = _mock_response(
-            {"error": "Not connected", "code": "not_connected", "connectUrl": "/connect/gmail"},
-            success=False,
-        )
-
-        client = LeashIntegrations(auth_token="t")
-
-        with pytest.raises(LeashError) as exc_info:
-            client._call("gmail", "list-messages")
-
-        assert exc_info.value.connect_url == "/connect/gmail"
-
-
-class TestEnvCache:
-    @patch("leash.client.requests.get")
-    def test_caches_after_first_call(self, mock_get):
-        mock_get.return_value = _mock_response({"DB_URL": "postgres://...", "API_KEY": "abc"})
-
-        client = LeashIntegrations(auth_token="t")
-
-        result1 = client.get_env()
-        result2 = client.get_env()
-        result3 = client.get_env("DB_URL")
-
-        assert result1 == {"DB_URL": "postgres://...", "API_KEY": "abc"}
-        assert result2 == result1
-        assert result3 == "postgres://..."
-        assert mock_get.call_count == 1  # only one HTTP call
-
-    @patch("leash.client.requests.get")
-    def test_get_env_missing_key_returns_none(self, mock_get):
-        mock_get.return_value = _mock_response({"DB_URL": "postgres://..."})
-
-        client = LeashIntegrations(auth_token="t")
-        assert client.get_env("NONEXISTENT") is None
-
-
-class TestConnections:
-    @patch("leash.client.requests.get")
-    def test_is_connected_true(self, mock_get):
-        mock_get.return_value = _mock_response([
-            {"providerId": "gmail", "status": "active"},
-            {"providerId": "drive", "status": "inactive"},
-        ])
-
-        client = LeashIntegrations(auth_token="t")
-        assert client.is_connected("gmail") is True
-
-    @patch("leash.client.requests.get")
-    def test_is_connected_false(self, mock_get):
-        mock_get.return_value = _mock_response([
-            {"providerId": "drive", "status": "inactive"},
-        ])
-
-        client = LeashIntegrations(auth_token="t")
-        assert client.is_connected("gmail") is False
-
-    @patch("leash.client.requests.get")
-    def test_is_connected_on_error(self, mock_get):
-        mock_get.side_effect = Exception("network error")
-
-        client = LeashIntegrations(auth_token="t")
-        assert client.is_connected("gmail") is False
-
-    def test_get_connect_url(self):
-        client = LeashIntegrations(auth_token="t", platform_url="https://leash.build")
-        url = client.get_connect_url("gmail")
-        assert url == "https://leash.build/api/integrations/connect/gmail"
-
-    def test_get_connect_url_with_return(self):
-        client = LeashIntegrations(auth_token="t", platform_url="https://leash.build")
-        url = client.get_connect_url("gmail", return_url="https://myapp.com/settings")
-        assert "return_url=" in url
-        assert "myapp.com" in url
-
-
-class TestMCP:
-    @patch("leash.client.requests.post")
-    def test_mcp_call(self, mock_post):
-        mock_post.return_value = _mock_response({"result": "ok"})
-
-        client = LeashIntegrations(auth_token="t", api_key="k")
-        result = client.mcp("@mcp/server-notion", "search", {"query": "test"})
-
-        assert result == {"result": "ok"}
-        url = mock_post.call_args[0][0]
-        assert "/api/mcp/run" in url
-
-        body = mock_post.call_args.kwargs.get("json") or mock_post.call_args[1].get("json")
-        assert body["package"] == "@mcp/server-notion"
-        assert body["tool"] == "search"
-        assert body["args"] == {"query": "test"}
-
-    @patch("leash.client.requests.post")
-    def test_mcp_error(self, mock_post):
-        mock_post.return_value = _mock_response(
-            {"error": "Package not found", "code": "not_found"},
-            success=False,
-        )
-
-        client = LeashIntegrations(auth_token="t")
-        with pytest.raises(LeashError):
-            client.mcp("@mcp/nonexistent", "tool")
-
-
-class TestGetAccessToken:
-    @patch("leash.client.requests.post")
-    def test_returns_access_token(self, mock_post):
-        mock_post.return_value = _mock_response(
-            {"accessToken": "xoxb-slack-token", "provider": "slack"}
-        )
-
-        client = LeashIntegrations(
-            auth_token="jwt-token",
-            platform_url="https://test.leash.build",
-            api_key="api-key-123",
-        )
-        token = client.get_access_token("slack")
-
-        assert token == "xoxb-slack-token"
-        mock_post.assert_called_once()
-        url = mock_post.call_args[0][0]
-        assert url == "https://test.leash.build/api/integrations/token"
-        body = mock_post.call_args.kwargs.get("json") or mock_post.call_args[1].get("json")
-        assert body == {"provider": "slack"}
-        headers = mock_post.call_args.kwargs.get("headers") or mock_post.call_args[1].get("headers")
-        assert headers["Authorization"] == "Bearer jwt-token"
-        assert headers["X-API-Key"] == "api-key-123"
-        assert headers["Content-Type"] == "application/json"
-
-    @patch("leash.client.requests.post")
-    def test_raises_not_connected(self, mock_post):
-        mock_post.return_value = _mock_response(
-            {
-                "error": "Provider not connected",
-                "code": "not_connected",
-                "connectUrl": "/api/integrations/connect/slack",
-            },
-            success=False,
-        )
-
-        client = LeashIntegrations(auth_token="t")
-        with pytest.raises(LeashError) as exc_info:
-            client.get_access_token("slack")
-
-        assert exc_info.value.code == "not_connected"
-        assert exc_info.value.connect_url == "/api/integrations/connect/slack"
-
-
-class TestGetCustomMcpConfig:
-    @patch("leash.client.requests.get")
-    def test_returns_config(self, mock_get):
-        mock_get.return_value = _mock_response(
-            {
-                "slug": "linear",
-                "displayName": "Linear",
-                "url": "https://mcp.linear.app/sse",
-                "headers": {"Authorization": "Bearer linear-token"},
-            }
-        )
-
-        client = LeashIntegrations(
-            auth_token="jwt-token",
-            platform_url="https://test.leash.build",
-            api_key="api-key-123",
-        )
-        config = client.get_custom_mcp_config("linear")
-
-        assert config["slug"] == "linear"
-        assert config["displayName"] == "Linear"
-        assert config["url"] == "https://mcp.linear.app/sse"
-        assert config["headers"] == {"Authorization": "Bearer linear-token"}
-
-        mock_get.assert_called_once()
-        url = mock_get.call_args[0][0]
-        assert url == "https://test.leash.build/api/integrations/mcp-config/linear"
-        headers = mock_get.call_args.kwargs.get("headers") or mock_get.call_args[1].get("headers")
-        assert headers["Authorization"] == "Bearer jwt-token"
-        assert headers["X-API-Key"] == "api-key-123"
-
-    @patch("leash.client.requests.get")
-    def test_url_encodes_slug(self, mock_get):
-        mock_get.return_value = _mock_response(
-            {"slug": "my server", "displayName": "My Server", "url": "https://x", "headers": {}}
-        )
-
-        client = LeashIntegrations(auth_token="t", platform_url="https://test.leash.build")
-        client.get_custom_mcp_config("my server")
-
-        url = mock_get.call_args[0][0]
-        assert "my%20server" in url
-
-    @patch("leash.client.requests.get")
-    def test_raises_unknown_mcp_server(self, mock_get):
-        mock_get.return_value = _mock_response(
-            {"error": "Unknown MCP server", "code": "unknown_mcp_server"},
-            success=False,
-        )
-
-        client = LeashIntegrations(auth_token="t")
-        with pytest.raises(LeashError) as exc_info:
-            client.get_custom_mcp_config("nonexistent")
-
-        assert exc_info.value.code == "unknown_mcp_server"
-        assert "Unknown MCP server" in str(exc_info.value)
+        assert LeashUser is not None
+        assert IntegrationCaller is not None
+        assert callable(get_leash_user)
+        assert callable(is_authenticated)
+
+    def test_provider_namespaces_wired(self, flask_request, http_client_factory) -> None:
+        client, _ = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            assert hasattr(leash.integrations, "gmail")
+            assert hasattr(leash.integrations, "google_calendar")
+            assert hasattr(leash.integrations, "google_drive")
+            assert hasattr(leash.integrations, "linear")
+            assert isinstance(leash.integrations.provider("slack"), IntegrationCaller)
+
+    def test_ts_aliases_share_instance(self, flask_request, http_client_factory) -> None:
+        """`calendar` / `drive` aliases match the TS surface."""
+        client, _ = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            assert leash.integrations.calendar is leash.integrations.google_calendar
+            assert leash.integrations.drive is leash.integrations.google_drive
+
+    def test_version_is_0_4(self) -> None:
+        import leash
+
+        assert leash.__version__.startswith("0.4")
+
+
+class TestLifecycle:
+    def test_context_manager_closes_http_client(
+        self, flask_request, http_client_factory
+    ) -> None:
+        client, _ = http_client_factory()
+        with Leash(request=flask_request, http_client=client) as leash:
+            assert leash._http is client
+        # We injected the client, so Leash should not close it
+        assert not client.is_closed
+
+    def test_owned_client_closed_on_close(self, flask_request) -> None:
+        leash = Leash(request=flask_request)
+        owned = leash._http
+        leash.close()
+        assert owned.is_closed
